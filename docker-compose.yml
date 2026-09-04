@@ -20,7 +20,7 @@ services:
         - NEXT_PUBLIC_VIDEO_EXPORT_CTA_DESTINATION=${NEXT_PUBLIC_VIDEO_EXPORT_CTA_DESTINATION:-}
         - NEXT_PUBLIC_ENABLE_PPTX_IMPORT=${NEXT_PUBLIC_ENABLE_PPTX_IMPORT:-}
     ports:
-      - '3000:3000'
+      - '33000:3000'
     env_file:
       - .env.local
     environment:

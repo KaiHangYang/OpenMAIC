@@ -105,6 +105,38 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Restore sharp's prebuilt libvips. sharp's binding (.node) dlopens
+# libvips-cpp.so.* out of the sibling @img/sharp-libvips-* package through an ELF
+# RPATH -- no JS references the file, so Next's file tracing copies the binding
+# and drops the library, and the standalone server dies on the first image op with
+#   ERR_DLOPEN_FAILED: Error loading shared library libvips-cpp.so.<v>
+# Only fill directories the traced output already created, so this copies the one
+# library actually reachable from the shipped bindings instead of every platform
+# variant in the store (declaring the .so via outputFileTracingIncludes instead
+# makes Next materialize pnpm's symlinked package dirs, duplicating it 14x).
+RUN --mount=type=bind,from=deps,source=/app/node_modules,target=/deps-node-modules \
+    set -e; \
+    restored=0; \
+    for so in $(find /deps-node-modules/.pnpm -name 'libvips-cpp.so.*' -type f -path '*linuxmusl*'); do \
+      dest="/app/node_modules/${so#/deps-node-modules/}"; \
+      if [ -d "$(dirname "$dest")" ] && [ ! -e "$dest" ]; then \
+        cp "$so" "$dest"; \
+        restored=$((restored + 1)); \
+      fi; \
+    done; \
+    echo "restored $restored libvips shared library/libraries"
+
+# Fail the build here rather than at runtime if the restore above ever stops
+# matching (a sharp/libvips upgrade changing the package layout, say).
+RUN node -e "const s=require('sharp');s({create:{width:8,height:8,channels:3,background:'#000'}}).png().toBuffer().then(()=>console.log('sharp OK: sharp '+s.versions.sharp+', libvips '+s.versions.vips))"
+
+# The compose stack mounts a named volume at /app/data. Docker seeds an empty
+# volume from the image's directory, ownership included, so this path has to
+# exist and belong to `nextjs` here -- otherwise the volume is created root-owned
+# and every writer under it (usage logs, classrooms, classroom-jobs, material
+# bytes) fails with EACCES against the uid 1001 the server runs as.
+RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
+
 USER nextjs
 
 EXPOSE 3000
