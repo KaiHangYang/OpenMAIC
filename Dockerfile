@@ -134,12 +134,14 @@ RUN --mount=type=bind,from=deps,source=/app/node_modules,target=/deps-node-modul
 # matching (a sharp/libvips upgrade changing the package layout, say).
 RUN node -e "const s=require('sharp');s({create:{width:8,height:8,channels:3,background:'#000'}}).png().toBuffer().then(()=>console.log('sharp OK: sharp '+s.versions.sharp+', libvips '+s.versions.vips))"
 
-# The compose stack mounts a named volume at /app/data. Docker seeds an empty
-# volume from the image's directory, ownership included, so this path has to
-# exist and belong to `nextjs` here -- otherwise the volume is created root-owned
-# and every writer under it (usage logs, classrooms, classroom-jobs, material
-# bytes) fails with EACCES against the uid 1001 the server runs as.
-RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
+# The app persists classrooms, classroom media, and usage records under
+# ./data, which docker-compose.yml mounts as the openmaic-data named volume.
+# Nothing above creates the directory, so on first run Docker materializes
+# the mountpoint as root:root and every write from the unprivileged runtime
+# user fails with EACCES — classroom persistence silently stores nothing
+# (THU-MAIC/OpenMAIC#1438). Creating it here makes the empty-volume copy-up
+# inherit the runtime user's ownership.
+RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 
 USER nextjs
 

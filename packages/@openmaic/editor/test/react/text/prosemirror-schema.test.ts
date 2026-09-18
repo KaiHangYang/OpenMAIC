@@ -8,6 +8,27 @@ import {
 } from '../../../src/react/text/prosemirror/document';
 
 describe('renderer ProseMirror schema', () => {
+  it('preserves font-measured leading spaces through editor round trips', () => {
+    const html =
+      '<p><span style="font-family: PingFang SC;font-size:24pt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;苗圃维护小组</span></p>';
+    const doc = createTextDocument(html);
+    expect(doc.textContent).toBe('\u00a0'.repeat(10) + '苗圃维护小组');
+    const output = serializeTextDocument(doc);
+    expect(createTextDocument(output).textContent).toBe(doc.textContent);
+  });
+
+  it('preserves imported link styles and compact trailing punctuation', () => {
+    const output = serializeTextDocument(
+      createTextDocument(
+        '<div style="padding:4.8px 9.6px"><p>课前调研<span style="display:inline-block;width:0.5em">：</span></p><p><a href="https://example.com" style="color:#4472C4;text-decoration:underline">link</a></p></div>',
+      ),
+    );
+    expect(output).toContain('width: 0.5em');
+    expect(output).toContain('display: inline-block');
+    expect(output).toContain('rgb(68, 114, 196)');
+    expect(output).toContain('text-decoration: underline');
+    expect(output).toContain('padding: 4.8px 9.6px');
+  });
   const column = (text: string) =>
     `<span data-pptx-tab-column="true" style="display: inline-block; width: 120px; min-width: max-content; text-align: left; text-indent: 0; white-space: pre">${text}</span>`;
 

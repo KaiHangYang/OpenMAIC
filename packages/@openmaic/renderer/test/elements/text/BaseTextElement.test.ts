@@ -18,6 +18,24 @@ const textElement: PPTTextElement = {
 };
 
 describe('BaseTextElement', () => {
+  it('does not add outer padding when rich text already owns frame insets', () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(BaseTextElement, {
+        elementInfo: {
+          ...textElement,
+          content: '<div style="padding: 4.8px 9.6px;"><p>Label</p></div>',
+        },
+      }),
+    );
+    expect(markup).toContain('box-sizing:border-box;padding:0');
+    expect(markup).not.toContain('padding:10px');
+  });
+  it('keeps default padding for ordinary authored text', () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(BaseTextElement, { elementInfo: textElement }),
+    );
+    expect(markup).toContain('padding:10px');
+  });
   it('preserves literal line endings in static text content', () => {
     const markup = renderToStaticMarkup(
       React.createElement(BaseTextElement, {
