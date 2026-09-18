@@ -36,9 +36,12 @@ import type { ImportContext, TransformResult } from './types';
 
 type ParsedPptxJson = Awaited<ReturnType<typeof parsePptxDefault>>;
 
-const convertPtToPx = (html: string, ratio: number) => {
-  return html.replace(/([\d.]+)pt\b/g, (_match, p1) => {
-    return `${(parseFloat(p1) * ratio).toFixed(1)}px`;
+const convertPtToPx = (html: string, ratio: number, fontScale = 1) => {
+  return html.replace(/(font-size:\s*)?([\d.]+)pt\b/g, (_match, fontSizeProperty, value) => {
+    // normAutofit scales glyphs (including bullets), not the frame's insets
+    // or paragraph indents. Unitless line-height follows the scaled font.
+    const scale = fontSizeProperty ? fontScale : 1;
+    return `${fontSizeProperty || ''}${(parseFloat(value) * ratio * scale).toFixed(1)}px`;
   });
 };
 
@@ -1016,6 +1019,8 @@ export async function transformParsedToSlides(
               warnUnconvertibleMedia(ctx, slideIndex, 'A shape image fill', pattern);
             }
             const fill = el.fill?.type === 'color' ? el.fill.value : '';
+            const autoFit = (el as { autoFit?: { type?: string; fontScale?: number } }).autoFit;
+            const fontScale = autoFit?.type === 'text' ? (autoFit.fontScale ?? 100) / 100 : 1;
 
             const element: PPTShapeElement = {
               type: 'shape',
@@ -1033,7 +1038,7 @@ export async function transformParsedToSlides(
               fixedRatio: false,
               rotate: el.rotate,
               text: {
-                content: convertPtToPx(el.content, ratio),
+                content: convertPtToPx(el.content, ratio, fontScale),
                 defaultFontName: theme.fontName,
                 defaultColor: theme.fontColor,
                 align: vAlignMap[el.vAlign] || 'middle',
@@ -1156,13 +1161,14 @@ export async function transformParsedToSlides(
                 'span:not([data-pptx-tab-column="true"])',
               );
               const fontsize = span?.style.fontSize
-                ? (parseInt(span?.style.fontSize) * ratio).toFixed(1) + 'px'
+                ? (parseFloat(span.style.fontSize) * ratio).toFixed(1) + 'px'
                 : '';
               const fontname = span?.style.fontFamily || '';
               const color = span?.style.color || cellData.fontColor;
 
               // 保留原始 <p> 段落结构（PPT 一个 <p> = 一段）
-              // 段内 <span> 的内联样式不保留：cell.style 已统一收口尺寸/颜色/字体，避免 inline 样式（pt 单位）覆盖按 ratio 折算后的 px 值
+              // cell.style provides a fallback; individual runs keep their own
+              // font sizes and families, with point sizes converted to canvas pixels.
               // 但 **段级定位**（margin-left / text-indent）必须保留：它把标题推到
               // 单元格左侧图标右边；丢掉它标题会贴到 cell 左沿、压在图标上
               // （slide 5 "环境的概念" 标题压住图标）。文本里的空格/换行在这里就地
@@ -1180,17 +1186,25 @@ export async function transformParsedToSlides(
               // 与空段的 font-size 决定标题/正文之间的间距——只保留 margin-left 会
               // 让空白间隔段塌成默认行高，正文与标题间距变大（slide 5 正文偏靠下）。
               const paraStyle = (p: HTMLElement): string => {
-                const s = p.getAttribute('style');
-                return s ? ` style="${s}"` : '';
+                // A paragraph's line box must follow its own text size rather
+                // than the first (often larger heading) run in the whole cell.
+                if (!p.style.fontSize) {
+                  const run = Array.from(p.querySelectorAll<HTMLSpanElement>('span')).find(
+                    (s) => s.style.fontSize && !s.closest('.katex'),
+                  );
+                  if (run) p.style.fontSize = run.style.fontSize;
+                }
+                const s = convertPtToPx(p.getAttribute('style') || '', ratio);
+                return s ? ` style="${s.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"` : '';
               };
-              // 段内 <span> 只保留 **run 强调**（color/font-weight/font-style/
-              // text-decoration）——正文"维护、改善和营造"等关键词是上色的，全部塌成
-              // cell.style 颜色会丢掉绿色关键词。其余一律丢弃，尤其是
-              // display:inline-block + width 的"占位间隔 span"（serializer 用它表示原
-              // PPT 的空格）——保留会在正文里凭空多出大段空白（slide 5 多余空地）；以及
-              // font-size/font-family（pt 会覆盖 cell.style 按 ratio 折算的 px）。
+              // Keep run typography and emphasis, but discard legacy spacer
+              // display/width styles. Explicit tab columns are handled below.
               const keepRunStyle = (el: HTMLElement): string => {
                 const parts: string[] = [];
+                if (el.style.fontSize) {
+                  parts.push(`font-size:${convertPtToPx(el.style.fontSize, ratio)}`);
+                }
+                if (el.style.fontFamily) parts.push(`font-family:${el.style.fontFamily}`);
                 if (el.style.color) parts.push(`color:${el.style.color}`);
                 const fw = el.style.fontWeight;
                 if (fw === 'bold' || (fw && parseInt(fw, 10) >= 600)) {
@@ -1200,7 +1214,7 @@ export async function transformParsedToSlides(
                 if (el.style.textDecoration && el.style.textDecoration !== 'none') {
                   parts.push(`text-decoration:${el.style.textDecoration}`);
                 }
-                return parts.join(';');
+                return parts.join(';').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
               };
               const serializeInline = (node: Node): string => {
                 let out = '';
@@ -1234,6 +1248,13 @@ export async function transformParsedToSlides(
                   if (el.tagName === 'SPAN') {
                     const st = keepRunStyle(el);
                     const inner = serializeInline(el);
+                    // Only the importer may recover OOXML's half-em hanging
+                    // punctuation. Do not retain arbitrary legacy spacer widths
+                    // or change the margins/wrapping of ordinary table cells.
+                    if (el.dataset.pptxHangingPunctuation === 'true') {
+                      out += `<span data-pptx-hanging-punctuation="true" style="display:inline-block;width:0.5em">${inner}</span>`;
+                      return;
+                    }
                     if (el.dataset.pptxTabColumn === 'true') {
                       // Preserve explicit tab boundaries, including empty columns.
                       // Scale their point widths like the cell's font size while

@@ -416,7 +416,8 @@ const paragraph: NodeSpec = {
       whiteSpace,
     } = node.attrs;
     let style = '';
-    if (align && align !== 'left') style += `text-align: ${align};`;
+    // Explicit left alignment must override a centered table cell ancestor.
+    if (align) style += `text-align: ${align};`;
     if (textIndentCss) style += `text-indent: ${textIndentCss};`;
     else if (textIndent) style += `text-indent: ${textIndent}em;`;
     if (fontsize) style += `font-size: ${fontsize};`;

@@ -8,6 +8,20 @@ import {
 } from '../../../src/react/text/prosemirror/document';
 
 describe('renderer ProseMirror schema', () => {
+  it('preserves explicit left alignment alongside centered paragraphs through round trips', () => {
+    const html =
+      '<p style="text-align:center">Heading</p><p style="text-align:left">Body</p><p>Inherited</p>';
+    const doc = createTextDocument(html);
+    const host = document.createElement('div');
+    host.innerHTML = serializeTextDocument(doc);
+    expect(Array.from(host.querySelectorAll('p'), (p) => p.style.textAlign)).toEqual([
+      'center',
+      'left',
+      '',
+    ]);
+    expect(createTextDocument(host.innerHTML).eq(doc)).toBe(true);
+  });
+
   it('preserves font-measured leading spaces through editor round trips', () => {
     const html =
       '<p><span style="font-family: PingFang SC;font-size:24pt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;苗圃维护小组</span></p>';
